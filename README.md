@@ -42,7 +42,7 @@ This is simply translated into:
 
 ```julia
 julia> println(@macroexpand @ccall glib.g_uri_escape_string(
-           uri::Cstring, ":/::Cstring, true::Cint
+           uri::Cstring, ":/"::Cstring, true::Cint
        )::Cstring)
 ccall((:g_uri_escape_string, glib), Cstring, (Cstring, Cstring, Cint), uri, ":/, true)
 ```
