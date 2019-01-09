@@ -2,7 +2,7 @@ module CcallMacros
 export @ccall, @cdef, @disable_sigint, @nonzero_systemerror
 
 """
-`functoccall` is an implementation detail of @ccall and @cdef
+`calltoccall` is an implementation detail of @ccall and @cdef
 
 takes and expression like :(printf("%d"::Cstring, value::Cuint)::Cvoid)
 returns: a tuple of (function_name, return_type, arg_types, args
@@ -13,7 +13,7 @@ The above input outputs this:
 Note that the args are in an array, not a quote block and have to be
 appended to the ccall in a separate step.
 """
-function functoccall(expr)
+function calltoccall(expr)
     expr.head != :(::) &&
         error("@ccall needs a function signature with a return type")
     rettype = expr.args[2]
@@ -63,7 +63,7 @@ same as:
 `ccall(:printf, Cvoid, (Cstring, Cint), "%d", 10)`
 """
 macro ccall(expr)
-    func, rettype, argtypes, args = functoccall(expr)
+    func, rettype, argtypes, args = calltoccall(expr)
     output = :(ccall($func, $rettype, $argtypes))
     append!(output.args, args)
     esc(output)
@@ -80,7 +80,7 @@ becomes:
 mkfifo(path, mode) = ccall(:mkfifo, Cint, (Cstring, Cuint), path, mode)
 """
 macro cdef(expr)
-    func, rettype, argtypes, args = functoccall(expr)
+    func, rettype, argtypes, args = calltoccall(expr)
     call = :(ccall($func, $rettype, $argtypes))
     append!(call.args, args)
     name = func isa QuoteNode ? func.value : func.args[1].value
