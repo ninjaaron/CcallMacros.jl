@@ -108,7 +108,7 @@ const comment = r"#=.*?=# "
 """
 throw a system error if the expression returns a non-zero exit status.
 """
-macro nonzero_systemerror(expr)
+macro nonzeroerr(expr)
     str = replace(string(expr), comment => "")
     out = quote
         err = $expr

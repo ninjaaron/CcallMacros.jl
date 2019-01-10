@@ -107,7 +107,7 @@ disable_sigint() do
 end
 ```
 
-## @nonzero_systemerror
+## @nonzeroerr
 
 Throws a system error for a non-zero exit.
 
@@ -115,10 +115,10 @@ Throws a system error for a non-zero exit.
 julia> touch("foo")
 "foo"
 
-julia> @nonzero_systemerror @ccall mkfifo("foo"::Cstring, 0o666::Cuint)::Cint
+julia> @nonzeroerr @ccall mkfifo("foo"::Cstring, 0o666::Cuint)::Cint
 ERROR: SystemError: @ccall mkfifo("foo"::Cstring, 0x01b6::Cuint)::Cint: File exists
 
-julia> println(@macroexpand @nonzero_systemerror @ccall mkfifo("foo"::Cstring, 0o666::Cuint)::Cint)
+julia> println(@macroexpand @nonzeroerr @ccall mkfifo("foo"::Cstring, 0o666::Cuint)::Cint)
 # LineNumberNodes have been removed for your viewing pleasure.
 begin
     err = ccall(:mkfifo, Cint, (Cstring, Cuint), "foo", 0x01b6)
