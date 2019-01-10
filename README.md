@@ -1,8 +1,8 @@
 # Macros related to `ccall`
 
-## @ccal macro
+## @ccall macro
 
-`@call` allows you to use more natural Julia syntax for calling C,
+`@ccall` allows you to use more natural Julia syntax for calling C,
 leaving the semantics of `ccall` unaltered.
 
 ```julia
