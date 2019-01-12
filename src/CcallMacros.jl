@@ -32,21 +32,10 @@ function calltoccall(expr)
     argtypes = :(())
     args = []
     for arg in call.args[2:end]
-        varargs = false
-        if arg.head == :...
-            varargs = true
-            arg = arg.args[1]
-        end
-
         arg.head != :(::) &&
             error("args in @ccall must be annotated")
         value = arg.args[1]
         type_ = arg.args[2]
-        # This currently doesn't work.
-        if varargs
-            value = :($value...)
-            type_ = :($type_...)
-        end
         push!(args, value)
         push!(argtypes.args, type_)
     end
