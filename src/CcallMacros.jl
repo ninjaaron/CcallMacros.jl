@@ -98,8 +98,9 @@ const comment = r"#=.*?=# "
 throw a system error if the expression returns a non-zero exit status.
 """
 macro nonzeroerr(expr, message=nothing)
-    message == nothing &&
+    if message == nothing
         message = replace(string(expr), comment => "")
+    end
     out = quote
         err = $expr
         systemerror($str, err != 0)
