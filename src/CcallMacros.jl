@@ -1,6 +1,7 @@
 module CcallMacros
 export @ccall, @cdef, @disable_sigint, @check_syserr
 
+
 """
 `parsecall` is an implementation detail of @ccall and @cdef
 
@@ -14,6 +15,7 @@ Note that the args are in an array, not a quote block and have to be
 appended to the ccall in a separate step.
 """
 function parsecall(expr)
+    # setup and check for errors
     expr.head != :(::) &&
         error("@ccall needs a function signature with a return type")
     rettype = expr.args[2]
@@ -22,24 +24,22 @@ function parsecall(expr)
     call.head != :call &&
         error("@ccall has to be a function call")
 
-    if (f = call.args[1]) isa Expr
-        lib = f.args[1]
-        fname = f.args[2]
-        func = :(($fname, $lib))
-    else
-        func = QuoteNode(f)
-    end
+    # get the function symbols
+    getfunc(f) = QuoteNode(f)
+    getfunc(f::Expr) = :(($(f.args[2]), $(f.args[1])))
+    func = getfunc(call.args[1])
+
+    # separate annotations from names
+    mkarg(arg) = arg.head != :(::) ?
+        error("args in @ccall must be annotated") :
+        (arg=arg.args[1], type_=arg.args[2])
+
+    pairs = mkarg.(call.args[2:end])
+    args = [a.arg for a in pairs]
     argtypes = :(())
-    args = []
-    for arg in call.args[2:end]
-        arg.head != :(::) &&
-            error("args in @ccall must be annotated")
-        value = arg.args[1]
-        type_ = arg.args[2]
-        push!(args, value)
-        push!(argtypes.args, type_)
-    end
-    func, rettype, argtypes, args
+    argtypes.args = [a.type_ for a in pairs]
+
+    return func, rettype, argtypes, args
 end
 
 """
