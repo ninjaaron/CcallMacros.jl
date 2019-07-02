@@ -1,5 +1,5 @@
 module CcallMacros
-export @ccall, @cdef, @disable_sigint, @nonzeroerr
+export @ccall, @cdef, @disable_sigint, @check_syserr
 
 """
 `parsecall` is an implementation detail of @ccall and @cdef
@@ -97,7 +97,7 @@ const comment = r"#=.*?=# "
 """
 throw a system error if the expression returns a non-zero exit status.
 """
-macro nonzeroerr(expr, message=nothing)
+macro check_syserr(expr, message=nothing)
     if message == nothing
         message = replace(string(expr), comment => "")
     end
