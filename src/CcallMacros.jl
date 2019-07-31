@@ -3,8 +3,50 @@ export @ccall, @cdef, @disable_sigint, @check_syserr
 
 struct NoType end
 
-getfunc(f) = QuoteNode(f)
-getfunc(f::Expr) = :(($(f.args[2]), $(f.args[1])))
+getcfunc(f) = QuoteNode(f)
+getcfunc(f::Expr) = :(($(f.args[2]), $(f.args[1])))
+
+"""
+Determine if there are varargs and return a vector of all arguments
+based on the call signature.
+
+returns a tupel of `(hasvarargs, arguments)`
+"""
+function getargs(call)
+    hasvarargs::Bool = false
+    firstarg = call.args[2]
+    if firstarg isa Expr && firstarg.head === :parameters
+        length(firstarg.args) > 1 || (kw = firstarg.args[1].args)[1] !== :varargs &&
+            error("@ccall only takes one keyword argument: varargs")
+        hasvarargs = true
+        vararg_type = kw[2]
+        return vararg_type, hasvarargs, call.args[3:end]
+    else
+        return Nothing, hasvarargs, call.args[2:end]
+    end
+end
+
+"""
+`mkarg` takes an argument and returns a tuple of symbol and type.
+"""
+function mkarg(arg)
+    if arg.head != :(::)
+        error("args in @ccall need type annotations")
+    end
+    return (arg=arg.args[1], type=arg.args[2])
+end
+
+function mkargs(args, has_varargs)
+    in_vararg::Bool = false
+    return map(args) do arg
+        in_vararg && return (arg=arg, type=NoType)
+        if has_varargs && !isa(arg, Expr)
+            in_vararg = true
+            return (arg=arg, type=NoType)
+        end
+        return mkarg(arg)
+    end
+end
 
 """
 `parsecall` is an implementation detail of `@ccall` and `@cdef`
@@ -30,41 +72,11 @@ function parsecall(expr)
         error("@ccall has to be a function call")
 
     # get the function symbols
-    func = getfunc(call.args[1])
-
-    hasvarargs = false
-    firstarg = call.args[2]
-    if firstarg isa Expr && firstarg.head === :parameters
-        length(firstarg.args) > 1 || (kw = firstarg.args[1].args)[1] !== :varargs &&
-            error("@ccall only takes one keyword argument: varargs")
-        hasvarargs = true
-        vararg_type = kw[2]
-        allargs = call.args[3:end]
-    else
-        allargs = call.args[2:end]
-    end
+    func = getcfunc(call.args[1])
+    vararg_type, hasvarargs, allargs = getargs(call)
 
     # separate annotations from names
-    in_vararg::Bool = false
-    function mkarg(arg)
-        in_vararg && return (arg=arg, type=NoType)
-        if hasvarargs && !isa(arg, Expr)
-            in_vararg = true
-            return mkarg(arg)
-        end
-
-        if arg.head != :(::)
-            error("args in @ccall must be annotated")
-        end
-        type = if in_vararg
-            :($(arg.args[2])...)
-        else
-            arg.args[2]
-        end
-        return (arg=arg.args[1], type=type)
-    end
-
-    pairs = mkarg.(allargs)
+    pairs = mkargs(allargs, hasvarargs)
     args = [a.arg for a in pairs]
     types = Any[a.type for a in pairs if a.type !== NoType]
     hasvarargs && push!(types, :($vararg_type...))
