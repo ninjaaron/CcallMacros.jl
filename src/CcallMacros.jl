@@ -27,7 +27,10 @@ function getargs(call)
 end
 
 """
-`mkarg` takes an argument and returns a tuple of symbol and type.
+       mkarg(arg)
+
+`mkarg` takes an argument and returns a tuple of symbol and type. The
+argument must have a type annotation or an error will be thrown.
 """
 function mkarg(arg)
     if arg.head != :(::)
@@ -36,6 +39,14 @@ function mkarg(arg)
     return (arg=arg.args[1], type=arg.args[2])
 end
 
+"""
+    mkargs(args, has_varargs)
+
+takes an iterable of arguments from a function call and returns an
+array of named tuples of (arg=symbol, type=type). If `has_varargs` is
+set to `true`, the value of `type` will be set to `NoType`, to be
+filtered out later.
+"""
 function mkargs(args, has_varargs)
     in_vararg::Bool = false
     return map(args) do arg
@@ -49,9 +60,11 @@ function mkargs(args, has_varargs)
 end
 
 """
-`parsecall` is an implementation detail of `@ccall` and `@cdef`
+    parsecall(expression)
 
-takes and expression like `:(printf("%d"::Cstring, value::Cuint)::Cvoid)`
+`parsecall` is an implementation detail of `@ccall
+
+it takes and expression like `:(printf("%d"::Cstring, value::Cuint)::Cvoid)`
 returns: a tuple of `(function_name, return_type, arg_types, args)`
 
 The above input outputs this:
@@ -86,13 +99,35 @@ function parsecall(expr)
 end
 
 """
+    @ccall(call expression)
+
 convert a julia-style function definition to a ccall:
 
-    @ccall printf("%d"::Cstring, 10::Cint)::Cvoid
+    @ccall printf("%d"::Cstring, 10::Cint)::Cint
 
 same as:
 
-    ccall(:printf, Cvoid, (Cstring, Cint), "%d", 10)
+    ccall(:printf, Cint, (Cstring, Cint), "%d", 10)
+
+All arguments must have type annotations and the return type must also
+be annotated.
+
+varargs are supported with the following convention:
+
+    @ccall printf("%d, %d, %d"::Cstring, 1, 2, 3; varargs=Cint)::Cint
+
+Note that, as with the current ccall API, all varargs must be of the
+same type.
+
+Using functions from other libraries is supported like this
+
+    const glib = "libglib-2.0"
+    @ccall glib.g_uri_escape_string(
+        uri::Cstring, ":/"::Cstring, true::Cint
+    )::Cstring
+
+The string literal could also be used directly before the symbol of
+the function name, if desired `"libglib-2.0".g_uri_escape_string(...`
 """
 macro ccall(expr)
     func, rettype, argtypes, args = parsecall(expr)
@@ -100,7 +135,6 @@ macro ccall(expr)
     append!(output.args, args)
     esc(output)
 end
-
 """
 define a _very_ thin wrapper function on a ccall. Mostly for wrapping
 libraries quickly as a foundation for a higher-level interface.
