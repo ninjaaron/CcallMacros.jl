@@ -1,5 +1,4 @@
 using Test
-
 using CcallMacros: @ccall, parsecall, CcallError
 
 @testset "test basic parsecall functionality" begin
@@ -62,7 +61,7 @@ end
     let buffer = BUFFER
         while (byte = unsafe_load(buffer)) != 0x00
             bigger = @ccall toupper(byte::Cint)::Cint
-            unsafe_store!(buffer, bigger)
+            unsafe_store!(buffer, bigger) 
             buffer += 1
         end
     end

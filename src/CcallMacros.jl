@@ -191,5 +191,4 @@ macro check_syserr(expr, message=nothing)
     end
 end
 
-
 end # module
