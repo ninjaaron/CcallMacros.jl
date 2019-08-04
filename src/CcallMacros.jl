@@ -135,6 +135,34 @@ macro ccall(expr)
 end
 
 """
+    nolinenum(expr)
+
+remove `LineNumberNodes`
+"""
+nolinenum(s) = s
+nolinenum(e::Expr) =
+    Expr(e.head, (nolinenum(a) for a in e.args if !isa(a, LineNumberNode))...)
+
+getsym(arg) = hashead(arg, :(::)) ? arg.args[1] : arg
+getmacrocall(expr) = begin
+    hashead(expr, :macrocall) ? Tuple(expr.args) : (nothing, nothing, expr)
+end
+
+function cdef(funcname, expr)
+    macrocall, lnnode, expr = getmacrocall(expr)
+    func, rettype, argtypes, args = parsecall(expr)
+    realargs = getsym.(args)
+    call = :(ccall($func, $realret, $argtypes))
+    append!(call.args, realargs)
+    if macrocall != nothing
+        call = Expr(:macrocall, macrocall, lnnode, call)
+    end
+    definition = :($funcname())
+    append!(definition.args, args)
+    esc(:($definition = $call))
+end
+
+"""
 define a _very_ thin wrapper function on a ccall. Mostly for wrapping
 libraries quickly as a foundation for a higher-level interface.
 
@@ -144,14 +172,15 @@ becomes:
 
    mkfifo(path, mode) = ccall(:mkfifo, Cint, (Cstring, Cuint), path, mode)
 """
+macro cdef(funcname, expr)
+    cdef(funcname, expr)
+end
+
 macro cdef(expr)
-    func, rettype, argtypes, args = parsecall(expr)
-    call = :(ccall($func, $rettype, $argtypes))
-    append!(call.args, args)
+    _, _, inner = getmacrocall(expr)
+    func, _, _, _ = parsecall(inner)
     name = func isa QuoteNode ? func.value : func.args[1].value
-    definition = :($name())
-    append!(definition.args, args)
-    esc(:($definition = $call))
+    cdef(name, expr)
 end
 
 """
@@ -169,15 +198,6 @@ macro disable_sigint(expr)
 end
 
 """
-    nolinenum(expr)
-
-remove `LineNumberNodes`
-"""
-nolinenum(s) = s
-nolinenum(e::Expr) =
-    Expr(e.head, (nolinenum(a) for a in e.args if !isa(a, LineNumberNode))...)
-
-"""
 throw a system error if the expression returns a non-zero exit status.
 """
 macro check_syserr(expr, message=nothing)
@@ -187,7 +207,6 @@ macro check_syserr(expr, message=nothing)
     return quote
         err = $(esc(expr))
         systemerror($message, err != 0)
-        err
     end
 end
 
