@@ -2,10 +2,10 @@ using CcallMacros: @ccall, @cdef, @disable_sigint, @check_syserr, parsecall
 using Test
 
 @testset "test basic parscall functionality" begin
-    const CALLEXPR = :(
+    callexpr = :(
         libc.printf("%d"::Cstring, value::Cuint)::CVoid
     )
-    @test parsecall(CALLEXPR) == (
+    @test parsecall(callexpr) == (
         :(:printf, libc),     # function
         :CVoid,               # return type
         :((Cstring, Cuint)),  # argument types
@@ -41,8 +41,8 @@ end
 @testset "run @ccall with C standard library functions" begin
     @test @ccall(sqrt(4.0::Cdouble)::Cdouble) == 2.0
 
-    const STRING = "hello"
-    const BUFFER = Ptr{UInt8}(Libc.malloc((length(STRING) + 1) * sizeof(Cchar)))
+    STRING = "hello"
+    BUFFER = Ptr{UInt8}(Libc.malloc((length(STRING) + 1) * sizeof(Cchar)))
     @ccall strcpy(BUFFER::Cstring, STRING::Cstring)::Cstring
     @test unsafe_string(BUFFER) == STRING
 
