@@ -2,27 +2,28 @@ module CcallMacros
 export @ccall, @cdef, @disable_sigint, @check_syserr
 
 struct NoType end
+struct CcallError{T <: AbstractString} <: Exception
+    msg::T
+end
+Base.showerror(io::IO, e::CcallError) = print(io, "CcallError: ", e.msg)
 
 getcfunc(f) = QuoteNode(f)
 getcfunc(f::Expr) = :(($(f.args[2]), $(f.args[1])))
+hashead(symbol, _) = false
+hashead(expr::Expr, head) = expr.head === head
 
 """
 Determine if there are varargs and return a vector of all arguments
 based on the call signature.
 
-returns a tupel of `(hasvarargs, arguments)`
+returns a tuple of `(hasvarargs, arguments)`
 """
 function getargs(call)
-    hasvarargs::Bool = false
     firstarg = call.args[2]
-    if firstarg isa Expr && firstarg.head === :parameters
-        length(firstarg.args) > 1 || (kw = firstarg.args[1].args)[1] !== :varargs &&
-            error("@ccall only takes one keyword argument: varargs")
-        hasvarargs = true
-        vararg_type = kw[2]
-        return vararg_type, hasvarargs, call.args[3:end]
+    if hashead(firstarg, :parameters)
+        return call.args[3:end], firstarg.args
     else
-        return Nothing, hasvarargs, call.args[2:end]
+        return call.args[2:end], []
     end
 end
 
@@ -33,30 +34,19 @@ end
 argument must have a type annotation or an error will be thrown.
 """
 function mkarg(arg)
-    if arg.head != :(::)
-        error("args in @ccall need type annotations")
-    end
+    !hashead(arg, :(::)) &&
+        throw(CcallError("args in @ccall need type annotations. '$arg' doesn't have one."))
     return (arg=arg.args[1], type=arg.args[2])
 end
 
 """
-    mkargs(args, has_varargs)
-
-takes an iterable of arguments from a function call and returns an
-array of named tuples of (arg=symbol, type=type). If `has_varargs` is
-set to `true`, the value of `type` will be set to `NoType`, to be
-filtered out later.
+get the type specified on the varargs. throw if there is more than one type.
 """
-function mkargs(args, has_varargs)
-    in_vararg::Bool = false
-    return map(args) do arg
-        in_vararg && return (arg=arg, type=NoType)
-        if has_varargs && !isa(arg, Expr)
-            in_vararg = true
-            return (arg=arg, type=NoType)
-        end
-        return mkarg(arg)
-    end
+function getvarargtype(varargs)
+    vararg_types = Set(a.type for a in varargs)
+    length(vararg_types) > 1 &&
+        throw(CcallError("varargs @ccall with different argument types not yet supported"))
+    return pop!(vararg_types)
 end
 
 """
@@ -76,25 +66,32 @@ appended to the ccall in a separate step.
 """
 function parsecall(expr)
     # setup and check for errors
-    expr.head != :(::) &&
-        error("@ccall needs a function signature with a return type")
+    !hashead(expr, :(::)) &&
+        throw(CcallError("@ccall needs a function signature with a return type"))
     rettype = expr.args[2]
 
     call = expr.args[1]
-    call.head != :call &&
-        error("@ccall has to be a function call")
+    !hashead(call, :call) &&
+        throw(CcallError("@ccall has to take a function call"))
 
     # get the function symbols
     func = getcfunc(call.args[1])
-    vararg_type, hasvarargs, allargs = getargs(call)
+    normalargs, varargs = getargs(call)
 
     # separate annotations from names
-    pairs = mkargs(allargs, hasvarargs)
-    args = [a.arg for a in pairs]
-    types = Any[a.type for a in pairs if a.type !== NoType]
-    hasvarargs && push!(types, :($vararg_type...))
+    normalargs = mkarg.(normalargs)
+    args = Any[a.arg for a in normalargs]
+    types = Any[a.type for a in normalargs]
     argtypes = :(())
     argtypes.args = types
+
+    isempty(varargs) && return func, rettype, argtypes, args
+
+    # vararg handling. to be changed if rebased on foreigncall.
+    varargs = mkarg.(varargs)
+    append!(args, (a.arg for a in varargs))
+    vararg_type = getvarargtype(varargs)
+    push!(types, :($vararg_type...))
     return func, rettype, argtypes, args
 end
 
@@ -114,12 +111,13 @@ be annotated.
 
 varargs are supported with the following convention:
 
-    @ccall printf("%d, %d, %d"::Cstring, 1, 2, 3; varargs=Cint)::Cint
+    @ccall printf("%d, %d, %d"::Cstring ; 1::Cint, 2::Cint, 3::Cint)::Cint
 
-Note that, as with the current ccall API, all varargs must be of the
-same type.
+Mind the semicolon. Note that, as with the current ccall API, all
+varargs must be of the same type.
 
-Using functions from other libraries is supported like this
+Using functions from other libraries is supported by prefixing
+the function name with the name of the C library, like this:
 
     const glib = "libglib-2.0"
     @ccall glib.g_uri_escape_string(
@@ -135,6 +133,35 @@ macro ccall(expr)
     append!(output.args, args)
     esc(output)
 end
+
+"""
+    nolinenum(expr)
+
+remove `LineNumberNodes`
+"""
+nolinenum(s) = s
+nolinenum(e::Expr) =
+    Expr(e.head, (nolinenum(a) for a in e.args if !isa(a, LineNumberNode))...)
+
+getsym(arg) = hashead(arg, :(::)) ? arg.args[1] : arg
+getmacrocall(expr) = begin
+    hashead(expr, :macrocall) ? Tuple(expr.args) : (nothing, nothing, expr)
+end
+
+function cdef(funcname, expr)
+    macrocall, lnnode, expr = getmacrocall(expr)
+    func, rettype, argtypes, args = parsecall(expr)
+    realargs = getsym.(args)
+    call = :(ccall($func, $realret, $argtypes))
+    append!(call.args, realargs)
+    if macrocall != nothing
+        call = Expr(:macrocall, macrocall, lnnode, call)
+    end
+    definition = :($funcname())
+    append!(definition.args, args)
+    esc(:($definition = $call))
+end
+
 """
 define a _very_ thin wrapper function on a ccall. Mostly for wrapping
 libraries quickly as a foundation for a higher-level interface.
@@ -145,14 +172,15 @@ becomes:
 
    mkfifo(path, mode) = ccall(:mkfifo, Cint, (Cstring, Cuint), path, mode)
 """
+macro cdef(funcname, expr)
+    cdef(funcname, expr)
+end
+
 macro cdef(expr)
-    func, rettype, argtypes, args = parsecall(expr)
-    call = :(ccall($func, $rettype, $argtypes))
-    append!(call.args, args)
+    _, _, inner = getmacrocall(expr)
+    func, _, _, _ = parsecall(inner)
     name = func isa QuoteNode ? func.value : func.args[1].value
-    definition = :($name())
-    append!(definition.args, args)
-    esc(:($definition = $call))
+    cdef(name, expr)
 end
 
 """
@@ -169,21 +197,17 @@ macro disable_sigint(expr)
     esc(out)
 end
 
-const comment = r"#=.*?=# "
-
 """
 throw a system error if the expression returns a non-zero exit status.
 """
 macro check_syserr(expr, message=nothing)
     if message == nothing
-        message = replace(string(expr), comment => "")
+        message = nolinenum(expr) |> string
     end
-    out = quote
-        err = $expr
-        systemerror($str, err != 0)
-        err
+    return quote
+        err = $(esc(expr))
+        systemerror($message, err != 0)
     end
-    esc(out)
 end
 
 end # module
