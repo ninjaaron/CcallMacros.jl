@@ -19,16 +19,15 @@ based on the call signature.
 returns a tuple of `(hasvarargs, arguments)`
 """
 function getargs(call)
-    if length(call.args) >= 2
-        firstarg = call.args[2]
-        if hashead(firstarg, :parameters)
-            return call.args[3:end], firstarg.args
-        else
-            return call.args[2:end], []
-        end
-    else
+    # no arguments
+    length(call.args) >= 2 &&
         return call.args[2:end], []
-    end
+
+    firstarg = call.args[2]
+    hashead(firstarg, :parameters) &&
+        return call.args[3:end], firstarg.args
+
+    return call.args[2:end], []
 end
 
 """
