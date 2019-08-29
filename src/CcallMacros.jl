@@ -64,7 +64,7 @@ The above input outputs this:
 Note that the args are in an array, not a quote block and have to be
 appended to the ccall in a separate step.
 """
-function parsecall(expr)
+function parsecall(expr::Expr)
     # setup and check for errors
     !hashead(expr, :(::)) &&
         throw(CcallError("@ccall needs a function signature with a return type"))
