@@ -1,37 +1,44 @@
 using Test
-using CcallMacros: @ccall, parsecall, CcallError
+using CcallMacros: @ccall, parsecall, lower, remove_linums, CcallError
 
 @testset "test basic parsecall functionality" begin
     callexpr = :(
-        libc.printf("%d"::Cstring, value::Cuint)::Cvoid
+        libc.printf("%s = %d\n"::Cstring; name::Cstring, value::Cint)::Cvoid
     )
     @test parsecall(callexpr) == (
-        :(:printf, libc),     # function
-        :Cvoid,               # return type
-        :((Cstring, Cuint)),  # argument types
-        ["%d", :value],       # argument symbols
-        0                     # nreq
+        :((:printf, libc)),               # function
+        :Cvoid,                           # returntype
+        :((Cstring, Cstring, Cint)),      # argument types
+        Any["%s = %d\n", :name, :value],  # argument symbols
+        1                                 # number of required arguments (for varargs)
     )
 end
 
-# @testset "ensure the base-case of @ccall works, including library name" begin
-#     call = @macroexpand @ccall libstring.func(
-#         str::Cstring,
-#         num1::Cint,
-#         num2::Cint
-#     )::Cstring
-#     @test call == (
-#     :(let var"%1" = Base.cconvert(Cstring, str), var"%4" = Base.unsafe_convert(Cstring, var"%1"), var"%2" = Base.cconvert(Cint, num1), var"%5" = Base.unsafe_convert(Cint, var"%2"), var"%3" = Base.cconvert(Cint, num2), var"%6" = Base.unsafe_convert(Cint, var"%3")
-#       $(Expr(:foreigncall, :((:func, libstring)), :Cstring, :(Core.svec(Cstring, Cint, Cint)), 0, :(:ccall), Symbol("%4"), Symbol("%5"), Symbol("%6"), Symbol("%1"), Symbol("%2"), Symbol("%3")))
-#       end)
-# end
+@testset "ensure the base-case of @ccall works, including library name" begin
+    call = lower(:ccall, parsecall( :( libstring.func(
+        str::Cstring,
+        num1::Cint,
+        num2::Cint
+    )::Cstring))...)
+    @test call == remove_linums(quote
+        var"%1" = Base.cconvert($(Expr(:escape, :Cstring)), $(Expr(:escape, :str)))
+        var"%4" = Base.unsafe_convert($(Expr(:escape, :Cstring)), var"%1")
+        var"%2" = Base.cconvert($(Expr(:escape, :Cint)), $(Expr(:escape, :num1)))
+        var"%5" = Base.unsafe_convert($(Expr(:escape, :Cint)), var"%2")
+        var"%3" = Base.cconvert($(Expr(:escape, :Cint)), $(Expr(:escape, :num2)))
+        var"%6" = Base.unsafe_convert($(Expr(:escape, :Cint)), var"%3")
+        $(Expr(
+            :foreigncall,
+            :($(Expr(:escape, :((:func, libstring))))),
+            :($(Expr(:escape, :Cstring))),
+            :($(Expr(:escape, :(Core.svec(Cstring, Cint, Cint))))),
+            0,
+            :(:ccall),
+            Symbol("%4"), Symbol("%5"), Symbol("%6"),
+            Symbol("%1"), Symbol("%2"), Symbol("%3")))
+    end)
 
-# @testset "ensure @ccall handles varargs correctly" begin
-#     call = @macroexpand @ccall printf("%s = %d\n"::Cstring; "foo"::Cstring, 1::Cint)::Cint
-#     @test call == :(let var"%1" = (Base.cconvert)(Cstring, "%s = %d\n"), var"%4" = (Base.unsafe_convert)(Cstring, var"%1"), var"%2" = (Base.cconvert)(Cstring, "foo"), var"%5" = (Base.unsafe_convert)(Cstring, var"%2"), var"%3" = (Base.cconvert)(Cint, 1), var"%6" = (Base.unsafe_convert)(Cint, var"%3")
-#         $(Expr(:foreigncall, :(:printf), :Cint, :(Core.svec(Cstring, Cstring, Cint)), 1, :(:ccall), Symbol("%4"), Symbol("%5"), Symbol("%6"), Symbol("%1"), Symbol("%2"), Symbol("%3")))
-#     end)
-# end
+end
 
 @testset "ensure parsecall throws errors appropriately" begin
     # missing return type
@@ -41,7 +48,6 @@ end
     # missing type annotations on arguments
     @test_throws CcallError parsecall(:( foo(x)::Cint ))
 end
-
 
 
 # call some c functions
@@ -64,4 +70,19 @@ end
 
     @test unsafe_string(BUFFER) == uppercase(STRING)
     Libc.free(BUFFER)
+
+    # jamison's test of foreigncall, rewritten with @ccall
+    strp = Ref{Ptr{Cchar}}(0)
+    fmt = "hi+%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%.1f-%.1f-%.1f-%.1f-%.1f-%.1f-%.1f-%.1f-%.1f\n"
+
+    len = @ccall asprintf(
+        strp::Ptr{Ptr{Cchar}},
+        fmt::Cstring,
+        ; # begin varargs
+        0x1::UInt8, 0x2::UInt8, 0x3::UInt8, 0x4::UInt8, 0x5::UInt8, 0x6::UInt8, 0x7::UInt8, 0x8::UInt8, 0x9::UInt8, 0xa::UInt8, 0xb::UInt8, 0xc::UInt8, 0xd::UInt8, 0xe::UInt8, 0xf::UInt8,
+        1.1::Cfloat, 2.2::Cfloat, 3.3::Cfloat, 4.4::Cfloat, 5.5::Cfloat, 6.6::Cfloat, 7.7::Cfloat, 8.8::Cfloat, 9.9::Cfloat,
+    )::Cint
+    str = unsafe_string(strp[], len)
+    @ccall free(strp[]::Cstring)::Cvoid
+    @test str == "hi+1-2-3-4-5-6-7-8-9-10-11-12-13-14-15-1.1-2.2-3.3-4.4-5.5-6.6-7.7-8.8-9.9\n"
 end

@@ -12,6 +12,12 @@ getcfunc(f::Expr) = :(($(f.args[2]), $(f.args[1])))
 hashead(symbol, _) = false
 hashead(expr::Expr, head) = expr.head === head
 
+islinum(node) = node isa LineNumberNode
+
+remove_linums(e::Expr) =
+    Expr(e.head, remove_linums.(filter(!islinum, e.args))...)
+remove_linums(s) = s
+
 """
 Determine if there are varargs and return a vector of all arguments
 based on the call signature.
@@ -69,7 +75,7 @@ appended to the ccall in a separate step.
 """
 function parsecall(expr::Expr)
     # setup and check for errors
-    !hashead(expr, :(::)) &&
+    !hashead(expr, :(::)) && 
         throw(CcallError("@ccall needs a function signature with a return type"))
     rettype = expr.args[2]
 
@@ -98,6 +104,36 @@ function parsecall(expr::Expr)
     append!(argtypes.args, (a.type for a in varargs))
     return func, rettype, argtypes, args, nreq
 end
+
+function lower(convention, func, rettype, argtypes, args, nreq)
+    lowering = []
+    realargs = []
+    gcroots = []
+    for (i, (arg, type)) in enumerate(zip(args, argtypes.args))
+        sym = Symbol(string("%", i))
+        sym2 = Symbol(string("%", i + length(args)))
+        earg, etype = esc.([arg, type])
+        push!(lowering, :($sym = Base.cconvert($etype, $earg)))
+        push!(lowering, :($sym2 = Base.unsafe_convert($etype, $sym)))
+        push!(realargs, sym2)
+        push!(gcroots, sym)
+    end
+    etypes = :(Core.svec())
+    append!(etypes.args, argtypes.args)
+    append!(realargs, gcroots)
+    exp = Expr(:foreigncall,
+               esc(func),
+               esc(rettype),
+               esc(etypes),
+               nreq,
+               QuoteNode(convention),
+               realargs...)
+    push!(lowering, exp)
+    
+    return Expr(:block, lowering...)
+end
+
+
 """
     @ccall(call expression)
 
@@ -130,43 +166,13 @@ the function name with the name of the C library, like this:
 The string literal could also be used directly before the symbol of
 the function name, if desired `"libglib-2.0".g_uri_escape_string(...`
 """
-macro ccall(expr)
-    func, rettype, argtypes, args, nreq = parsecall(expr)
-    lowering = []
-    realargs = []
-    gcroots = []
-    for (i, (arg, type)) in enumerate(zip(args, argtypes.args))
-        sym = Symbol(string("%", i))
-        sym2 = Symbol(string("%", i))
-        earg, etype = esc.([arg, type])
-        push!(lowering, :($sym = $(esc(Base.cconvert))($etype, $earg)))
-        push!(lowering, :($sym2 = $(esc(Base.unsafe_convert))($etype, $sym)))
-        push!(realargs, sym2)
-        push!(gcroots, sym)
-    end
-    etypes = :(Core.svec())
-    append!(etypes.args, argtypes.args)
-    append!(realargs, gcroots)
-    exp = Expr(:foreigncall,
-               esc(func),
-               esc(rettype),
-               esc(etypes),
-               nreq,
-               :(:ccall),
-               realargs...)
-    push!(lowering, exp)
-    
-    return Expr(:block, lowering...)
+macro ccall(convention, expr)
+    return lower(convention, parsecall(expr)...)
 end
 
-"""
-    nolinenum(expr)
-
-remove `LineNumberNodes`
-"""
-nolinenum(s) = s
-nolinenum(e::Expr) =
-    Expr(e.head, (nolinenum(a) for a in e.args if !isa(a, LineNumberNode))...)
+macro ccall(expr)
+    return lower(:ccall, parsecall(expr)...)
+end
 
 getsym(arg) = hashead(arg, :(::)) ? arg.args[1] : arg
 getmacrocall(expr) = begin
@@ -227,7 +233,7 @@ throw a system error if the expression returns a non-zero exit status.
 """
 macro check_syserr(expr, message=nothing)
     if message == nothing
-        message = nolinenum(expr) |> string
+        message = remove_linums(expr) |> string
     end
     return quote
         err = $(esc(expr))
