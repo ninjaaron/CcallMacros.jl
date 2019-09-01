@@ -20,8 +20,8 @@ returns a tuple of `(hasvarargs, arguments)`
 """
 function getargs(call)
     # no arguments
-    length(call.args) >= 2 &&
-        return call.args[2:end], []
+    length(call.args) > 2 &&
+        return [], []
 
     firstarg = call.args[2]
     hashead(firstarg, :parameters) &&
