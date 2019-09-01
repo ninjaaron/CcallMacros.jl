@@ -16,12 +16,12 @@ hashead(expr::Expr, head) = expr.head === head
 Determine if there are varargs and return a vector of all arguments
 based on the call signature.
 
-returns a tuple of `(hasvarargs, arguments)`
+returns a tuple of `(arguments, varargs)`
 """
 function getargs(call)
     # no arguments
-    length(call.args) >= 2 &&
-        return call.args[2:end], []
+    length(call.args) < 2 &&
+        return [], []
 
     firstarg = call.args[2]
     hashead(firstarg, :parameters) &&
@@ -81,6 +81,7 @@ function parsecall(expr::Expr)
     func = getcfunc(call.args[1])
     normalargs, varargs = getargs(call)
 
+
     # separate annotations from names
     normalargs = mkarg.(normalargs)
     args = Any[a.arg for a in normalargs]
@@ -88,16 +89,15 @@ function parsecall(expr::Expr)
     argtypes = :(())
     argtypes.args = types
 
-    isempty(varargs) && return func, rettype, argtypes, args
+    isempty(varargs) && return func, rettype, argtypes, args, 0
+    nreq = length(args)
 
-    # vararg handling. to be changed if rebased on foreigncall.
+    # vararg handling.
     varargs = mkarg.(varargs)
     append!(args, (a.arg for a in varargs))
-    vararg_type = getvarargtype(varargs)
-    push!(types, :($vararg_type...))
-    return func, rettype, argtypes, args
+    append!(argtypes.args, (a.type for a in varargs))
+    return func, rettype, argtypes, args, nreq
 end
-
 """
     @ccall(call expression)
 
@@ -131,10 +131,32 @@ The string literal could also be used directly before the symbol of
 the function name, if desired `"libglib-2.0".g_uri_escape_string(...`
 """
 macro ccall(expr)
-    func, rettype, argtypes, args = parsecall(expr)
-    output = :(ccall($func, $rettype, $argtypes))
-    append!(output.args, args)
-    esc(output)
+    func, rettype, argtypes, args, nreq = parsecall(expr)
+    lowering = []
+    realargs = []
+    gcroots = []
+    for (i, (arg, type)) in enumerate(zip(args, argtypes.args))
+        sym = Symbol(string("%", i))
+        sym2 = Symbol(string("%", i))
+        earg, etype = esc.([arg, type])
+        push!(lowering, :($sym = $(esc(Base.cconvert))($etype, $earg)))
+        push!(lowering, :($sym2 = $(esc(Base.unsafe_convert))($etype, $sym)))
+        push!(realargs, sym2)
+        push!(gcroots, sym)
+    end
+    etypes = :(Core.svec())
+    append!(etypes.args, argtypes.args)
+    append!(realargs, gcroots)
+    exp = Expr(:foreigncall,
+               esc(func),
+               esc(rettype),
+               esc(etypes),
+               nreq,
+               :(:ccall),
+               realargs...)
+    push!(lowering, exp)
+    
+    return Expr(:block, lowering...)
 end
 
 """
