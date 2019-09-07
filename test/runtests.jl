@@ -1,14 +1,14 @@
 using Test
-using CcallMacros: @ccall, parsecall, lower, remove_linums, CcallError
+using CcallMacros: @ccall, parsecall, lower
 
 @testset "test basic parsecall functionality" begin
     callexpr = :(
-        libc.printf("%s = %d\n"::Cstring; name::Cstring, value::Cint)::Cvoid
+        libc.printf("%s = %d\n"::Cstring ; name::Cstring, value::Cint)::Cvoid
     )
     @test parsecall(callexpr) == (
         :((:printf, libc)),               # function
         :Cvoid,                           # returntype
-        :((Cstring, Cstring, Cint)),      # argument types
+        Any[:Cstring, :Cstring, :Cint],   # argument types
         Any["%s = %d\n", :name, :value],  # argument symbols
         1                                 # number of required arguments (for varargs)
     )
@@ -20,7 +20,7 @@ end
         num1::Cint,
         num2::Cint
     )::Cstring))...)
-    @test call == remove_linums(quote
+    @test call == Base.remove_linenums!(quote
         var"%1" = Base.cconvert($(Expr(:escape, :Cstring)), $(Expr(:escape, :str)))
         var"%4" = Base.unsafe_convert($(Expr(:escape, :Cstring)), var"%1")
         var"%2" = Base.cconvert($(Expr(:escape, :Cint)), $(Expr(:escape, :num1)))
@@ -42,11 +42,11 @@ end
 
 @testset "ensure parsecall throws errors appropriately" begin
     # missing return type
-    @test_throws CcallError parsecall(:( foo(4.0::Cdouble )))
+    @test_throws ArgumentError parsecall(:( foo(4.0::Cdouble )))
     # not a function call
-    @test_throws CcallError parsecall(:( foo::Type ))
+    @test_throws ArgumentError parsecall(:( foo::Type ))
     # missing type annotations on arguments
-    @test_throws CcallError parsecall(:( foo(x)::Cint ))
+    @test_throws ArgumentError parsecall(:( foo(x)::Cint ))
 end
 
 
@@ -63,7 +63,7 @@ end
     let buffer = BUFFER
         while (byte = unsafe_load(buffer)) != 0x00
             bigger = @ccall toupper(byte::Cint)::Cint
-            unsafe_store!(buffer, bigger) 
+            unsafe_store!(buffer, bigger)
             buffer += 1
         end
     end
