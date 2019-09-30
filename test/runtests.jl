@@ -20,24 +20,22 @@ end
         num1::Cint,
         num2::Cint
     )::Cstring))...)
-    @test call == Base.remove_linenums!(quote
-        var"%1" = Base.cconvert($(Expr(:escape, :Cstring)), $(Expr(:escape, :str)))
-        var"%4" = Base.unsafe_convert($(Expr(:escape, :Cstring)), var"%1")
-        var"%2" = Base.cconvert($(Expr(:escape, :Cint)), $(Expr(:escape, :num1)))
-        var"%5" = Base.unsafe_convert($(Expr(:escape, :Cint)), var"%2")
-        var"%3" = Base.cconvert($(Expr(:escape, :Cint)), $(Expr(:escape, :num2)))
-        var"%6" = Base.unsafe_convert($(Expr(:escape, :Cint)), var"%3")
-        $(Expr(
-            :foreigncall,
-            :($(Expr(:escape, :((:func, libstring))))),
-            :($(Expr(:escape, :Cstring))),
-            :($(Expr(:escape, :(Core.svec(Cstring, Cint, Cint))))),
-            0,
-            :(:ccall),
-            Symbol("%4"), Symbol("%5"), Symbol("%6"),
-            Symbol("%1"), Symbol("%2"), Symbol("%3")))
-    end)
-
+    @test call == Base.remove_linenums!(
+        quote
+        arg1root = Base.cconvert($(Expr(:escape, :Cstring)), $(Expr(:escape, :str)))
+        arg1 = Base.unsafe_convert($(Expr(:escape, :Cstring)), arg1root)
+        arg2root = Base.cconvert($(Expr(:escape, :Cint)), $(Expr(:escape, :num1)))
+        arg2 = Base.unsafe_convert($(Expr(:escape, :Cint)), arg2root)
+        arg3root = Base.cconvert($(Expr(:escape, :Cint)), $(Expr(:escape, :num2)))
+        arg3 = Base.unsafe_convert($(Expr(:escape, :Cint)), arg3root)
+        $(Expr(:foreigncall,
+               :($(Expr(:escape, :((:func, libstring))))),
+               :($(Expr(:escape, :Cstring))),
+               :($(Expr(:escape, :(($(Expr(:core, :svec)))(Cstring, Cint, Cint))))),
+               0,
+               :(:ccall),
+               :arg1, :arg2, :arg3, :arg1root, :arg2root, :arg3root))
+        end)
 end
 
 @testset "ensure parsecall throws errors appropriately" begin
@@ -54,22 +52,11 @@ end
 @testset "run @ccall with C standard library functions" begin
     @test @ccall(sqrt(4.0::Cdouble)::Cdouble) == 2.0
 
-    STRING = "hello"
-    BUFFER = Ptr{UInt8}(Libc.malloc((length(STRING) + 1) * sizeof(Cchar)))
-    @ccall strcpy(BUFFER::Cstring, STRING::Cstring)::Cstring
-    @test unsafe_string(BUFFER) == STRING
-
-    # let's write C in Julia. Uppercasing the hard way.
-    let buffer = BUFFER
-        while (byte = unsafe_load(buffer)) != 0x00
-            bigger = @ccall toupper(byte::Cint)::Cint
-            unsafe_store!(buffer, bigger)
-            buffer += 1
-        end
-    end
-
-    @test unsafe_string(BUFFER) == uppercase(STRING)
-    Libc.free(BUFFER)
+    str = "hello"
+    buf = Ptr{UInt8}(Libc.malloc((length(str) + 1) * sizeof(Cchar)))
+    @ccall strcpy(buf::Cstring, str::Cstring)::Cstring
+    @test unsafe_string(buf) == str
+    Libc.free(buf)
 
     # jamison's test of foreigncall, rewritten with @ccall
     strp = Ref{Ptr{Cchar}}(0)

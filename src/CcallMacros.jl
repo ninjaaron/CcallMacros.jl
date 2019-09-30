@@ -51,7 +51,7 @@ function parsecall(expr::Expr)
         push!(types, arg.args[2])
     end
 
-    for arg in argstart:length(callargs)
+    for i in argstart:length(callargs)
         pusharg!(callargs[i])
     end
     # add any varargs if necessary
@@ -71,24 +71,22 @@ function lower(convention, func, rettype, types, args, nreq)
     realargs = []
     gcroots = []
     for (i, (arg, type)) in enumerate(zip(args, types))
-        sym = Symbol(string("%", i))
-        sym2 = Symbol(string("%", i + length(args)))
-        earg, etype = esc.([arg, type])
+        sym = Symbol(string("arg", i, "root"))
+        sym2 = Symbol(string("arg", i, ))
+        earg, etype = esc(arg), esc(type)
         push!(lowering, :($sym = Base.cconvert($etype, $earg)))
         push!(lowering, :($sym2 = Base.unsafe_convert($etype, $sym)))
         push!(realargs, sym2)
         push!(gcroots, sym)
     end
-    etypes = :(Core.svec())
-    append!(etypes.args, types)
-    append!(realargs, gcroots)
+    etypes = Expr(:call, Expr(:core, :svec), types...)
     exp = Expr(:foreigncall,
                esc(func),
                esc(rettype),
                esc(etypes),
                nreq,
                QuoteNode(convention),
-               realargs...)
+               realargs..., gcroots...)
     push!(lowering, exp)
 
     return Expr(:block, lowering...)
@@ -96,33 +94,32 @@ end
 
 
 """
-    @ccall(call expression)
+    @ccall some_c_function(arg::Type [...])::ReturnType
+
+    @ccall calling_convetion some_c_function(arg::Type)::ReturnType
 
 convert a julia-style function definition to a ccall:
 
-    @ccall printf("%d"::Cstring, 10::Cint)::Cint
+    @ccall link(source::Cstring, dest::Cstring)::Cint
 
 same as:
 
-    ccall(:printf, Cint, (Cstring, Cint), "%d", 10)
+    ccall(:link, Cint, (Cstring, Cstring), source, dest)
 
 All arguments must have type annotations and the return type must also
 be annotated.
 
 varargs are supported with the following convention:
 
-    @ccall printf("%d, %d, %d"::Cstring ; 1::Cint, 2::Cint, 3::Cint)::Cint
+    @ccall printf("%s = %d"::Cstring ; "foo"::Cstring, foo::Cint)::Cint
 
-Mind the semicolon. Note that, as with the current ccall API, all
-varargs must be of the same type.
+Mind the semicolon.
 
 Using functions from other libraries is supported by prefixing
 the function name with the name of the C library, like this:
 
     const glib = "libglib-2.0"
-    @ccall glib.g_uri_escape_string(
-        uri::Cstring, ":/"::Cstring, true::Cint
-    )::Cstring
+    @ccall glib.g_uri_escape_string(uri::Cstring, ":/"::Cstring, true::Cint)::Cstring
 
 The string literal could also be used directly before the symbol of
 the function name, if desired `"libglib-2.0".g_uri_escape_string(...`
