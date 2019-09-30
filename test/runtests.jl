@@ -14,7 +14,7 @@ using CcallMacros: @ccall, parsecall, lower
     )
 end
 
-@testset "ensure the base-case of @ccall works, including library name" begin
+@testset "ensure the base-case of @ccall works, including library name and pointer interpolation" begin
     call = lower(:ccall, parsecall( :( libstring.func(
         str::Cstring,
         num1::Cint,
@@ -36,15 +36,40 @@ end
                :(:ccall),
                :arg1, :arg2, :arg3, :arg1root, :arg2root, :arg3root))
         end)
+
+    # pointer interpolation
+    call = lower(:ccall, parsecall(:( $(Expr(:$, :fptr))("bar"::Cstring)::Cvoid ))...)
+    @test Base.remove_linenums!(call) == Base.remove_linenums!(
+    quote
+        begin
+            func = $(Expr(:escape, :fptr))
+            if !(func isa Ptr{Nothing})
+                name = :fptr
+                throw(ArgumentError("interpolated function `$(name)` was not a Ptr{Nothing}, but $(typeof(func))"))
+            end
+        end
+        arg1root = Base.cconvert($(Expr(:escape, :Cstring)), $(Expr(:escape, "bar")))
+        arg1 = Base.unsafe_convert($(Expr(:escape, :Cstring)), arg1root)
+        $(Expr(:foreigncall,
+               :($(Expr(:escape, :fptr))),
+               :($(Expr(:escape, :Cvoid))),
+               :($(Expr(:escape, :(($(Expr(:core, :svec)))(Cstring))))),
+               0,
+               :(:ccall),
+               :arg1, :arg1root))
+    end)
+
 end
 
-@testset "ensure parsecall throws errors appropriately" begin
+@testset "check error paths" begin
     # missing return type
     @test_throws ArgumentError parsecall(:( foo(4.0::Cdouble )))
     # not a function call
     @test_throws ArgumentError parsecall(:( foo::Type ))
     # missing type annotations on arguments
     @test_throws ArgumentError parsecall(:( foo(x)::Cint ))
+    # not a function pointer
+    @test_throws ArgumentError @ccall $PROGRAM_FILE("foo"::Cstring)::Cvoid
 end
 
 
@@ -58,7 +83,11 @@ end
     @test unsafe_string(buf) == str
     Libc.free(buf)
 
-    # jamison's test of foreigncall, rewritten with @ccall
+    str_identity = @cfunction(identity, Cstring, (Cstring,))
+    foo = @ccall $str_identity("foo"::Cstring)::Cstring
+    @test unsafe_string(foo) == "foo"
+
+    # test of foreigncall with varargs, rewritten with @ccall
     strp = Ref{Ptr{Cchar}}(0)
     fmt = "hi+%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%.1f-%.1f-%.1f-%.1f-%.1f-%.1f-%.1f-%.1f-%.1f\n"
 

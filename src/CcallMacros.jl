@@ -27,7 +27,15 @@ function parsecall(expr::Expr)
 
     # get the function symbols
     func = let f = call.args[1]
-        f isa Expr ? :(($(f.args[2]), $(f.args[1]))) : QuoteNode(f)
+        if Meta.isexpr(f, :.)
+            :(($(f.args[2]), $(f.args[1])))
+        elseif Meta.isexpr(f, :$)
+            f.args[1]
+        elseif f isa Symbol
+            QuoteNode(f)
+        else
+            throw(ArgumentError("@ccall function name must be a symbol, a `.` node (e.g. `libc.printf`) or an interpolated function pointer (with `\$`)"))
+        end
     end
 
     # detect varargs
@@ -70,6 +78,19 @@ function lower(convention, func, rettype, types, args, nreq)
     lowering = []
     realargs = []
     gcroots = []
+
+    # if interpolation was used, ensure  variable is a function pointer at runtime.
+    if func isa Symbol
+        check = quote
+            func = $(esc(func))
+            if !isa(func, Ptr{Nothing})
+                name = $(QuoteNode(func))
+                throw(ArgumentError("interpolated function `$name` was not a Ptr{Nothing}, but $(typeof(func))"))
+            end
+        end
+        push!(lowering, check)
+    end
+
     for (i, (arg, type)) in enumerate(zip(args, types))
         sym = Symbol(string("arg", i, "root"))
         sym2 = Symbol(string("arg", i, ))
