@@ -19,12 +19,15 @@ based on the call signature.
 returns a tuple of `(hasvarargs, arguments)`
 """
 function getargs(call)
+    # no arguments
+    length(call.args) > 2 &&
+        return [], []
+
     firstarg = call.args[2]
-    if hashead(firstarg, :parameters)
+    hashead(firstarg, :parameters) &&
         return call.args[3:end], firstarg.args
-    else
-        return call.args[2:end], []
-    end
+
+    return call.args[2:end], []
 end
 
 """
@@ -64,7 +67,7 @@ The above input outputs this:
 Note that the args are in an array, not a quote block and have to be
 appended to the ccall in a separate step.
 """
-function parsecall(expr)
+function parsecall(expr::Expr)
     # setup and check for errors
     !hashead(expr, :(::)) &&
         throw(CcallError("@ccall needs a function signature with a return type"))
