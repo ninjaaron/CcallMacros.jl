@@ -1,57 +1,6 @@
 module CcallMacros
 export @ccall, @cdef, @disable_sigint, @check_syserr
 
-struct NoType end
-struct CcallError{T <: AbstractString} <: Exception
-    msg::T
-end
-Base.showerror(io::IO, e::CcallError) = print(io, "CcallError: ", e.msg)
-
-getcfunc(f) = QuoteNode(f)
-getcfunc(f::Expr) = :(($(f.args[2]), $(f.args[1])))
-hashead(symbol, _) = false
-hashead(expr::Expr, head) = expr.head === head
-
-"""
-Determine if there are varargs and return a vector of all arguments
-based on the call signature.
-
-returns a tuple of `(hasvarargs, arguments)`
-"""
-function getargs(call)
-    # no arguments
-    length(call.args) > 2 &&
-        return [], []
-
-    firstarg = call.args[2]
-    hashead(firstarg, :parameters) &&
-        return call.args[3:end], firstarg.args
-
-    return call.args[2:end], []
-end
-
-"""
-       mkarg(arg)
-
-`mkarg` takes an argument and returns a tuple of symbol and type. The
-argument must have a type annotation or an error will be thrown.
-"""
-function mkarg(arg)
-    !hashead(arg, :(::)) &&
-        throw(CcallError("args in @ccall need type annotations. '$arg' doesn't have one."))
-    return (arg=arg.args[1], type=arg.args[2])
-end
-
-"""
-get the type specified on the varargs. throw if there is more than one type.
-"""
-function getvarargtype(varargs)
-    vararg_types = Set(a.type for a in varargs)
-    length(vararg_types) > 1 &&
-        throw(CcallError("varargs @ccall with different argument types not yet supported"))
-    return pop!(vararg_types)
-end
-
 """
     parsecall(expression)
 
@@ -62,93 +11,130 @@ returns: a tuple of `(function_name, return_type, arg_types, args)`
 
 The above input outputs this:
 
-    (:printf, :Cvoid, :((Cstring, Cuint)), ["%d", :value])
-
-Note that the args are in an array, not a quote block and have to be
-appended to the ccall in a separate step.
+    (:printf, :Cvoid, [:Cstring, :Cuint], ["%d", :value])
 """
 function parsecall(expr::Expr)
     # setup and check for errors
-    !hashead(expr, :(::)) &&
-        throw(CcallError("@ccall needs a function signature with a return type"))
+    if !Meta.isexpr(expr, :(::))
+        throw(ArgumentError("@ccall needs a function signature with a return type"))
+    end
     rettype = expr.args[2]
 
     call = expr.args[1]
-    !hashead(call, :call) &&
-        throw(CcallError("@ccall has to take a function call"))
+    if !Meta.isexpr(call, :call)
+        throw(ArgumentError("@ccall has to take a function call"))
+    end
 
     # get the function symbols
-    func = getcfunc(call.args[1])
-    normalargs, varargs = getargs(call)
+    func = let f = call.args[1]
+        f isa Expr ? :(($(f.args[2]), $(f.args[1]))) : QuoteNode(f)
+    end
 
-    # separate annotations from names
-    normalargs = mkarg.(normalargs)
-    args = Any[a.arg for a in normalargs]
-    types = Any[a.type for a in normalargs]
-    argtypes = :(())
-    argtypes.args = types
+    # detect varargs
+    varargs = nothing
+    argstart = 2
+    callargs = call.args
+    if length(callargs) >= 2 && Meta.isexpr(callargs[2], :parameters)
+        argstart = 3
+        varargs = callargs[2].args
+    end
 
-    isempty(varargs) && return func, rettype, argtypes, args
+    # collect args and types
+    args = []
+    types = []
 
-    # vararg handling. to be changed if rebased on foreigncall.
-    varargs = mkarg.(varargs)
-    append!(args, (a.arg for a in varargs))
-    vararg_type = getvarargtype(varargs)
-    push!(types, :($vararg_type...))
-    return func, rettype, argtypes, args
+    function pusharg!(arg)
+        if !Meta.isexpr(arg, :(::))
+            throw(ArgumentError("args in @ccall need type annotations. '$(repr(arg))' doesn't have one."))
+        end
+        push!(args, arg.args[1])
+        push!(types, arg.args[2])
+    end
+
+    for i in argstart:length(callargs)
+        pusharg!(callargs[i])
+    end
+    # add any varargs if necessary
+    nreq = 0
+    if !isnothing(varargs)
+        nreq = length(args)
+        for a in varargs
+            pusharg!(a)
+        end
+    end
+
+    return func, rettype, types, args, nreq
 end
 
+function lower(convention, func, rettype, types, args, nreq)
+    lowering = []
+    realargs = []
+    gcroots = []
+    for (i, (arg, type)) in enumerate(zip(args, types))
+        sym = Symbol(string("arg", i, "root"))
+        sym2 = Symbol(string("arg", i, ))
+        earg, etype = esc(arg), esc(type)
+        push!(lowering, :($sym = Base.cconvert($etype, $earg)))
+        push!(lowering, :($sym2 = Base.unsafe_convert($etype, $sym)))
+        push!(realargs, sym2)
+        push!(gcroots, sym)
+    end
+    etypes = Expr(:call, Expr(:core, :svec), types...)
+    exp = Expr(:foreigncall,
+               esc(func),
+               esc(rettype),
+               esc(etypes),
+               nreq,
+               QuoteNode(convention),
+               realargs..., gcroots...)
+    push!(lowering, exp)
+
+    return Expr(:block, lowering...)
+end
+
+
 """
-    @ccall(call expression)
+    @ccall some_c_function(arg::Type [...])::ReturnType
+
+    @ccall calling_convetion some_c_function(arg::Type)::ReturnType
 
 convert a julia-style function definition to a ccall:
 
-    @ccall printf("%d"::Cstring, 10::Cint)::Cint
+    @ccall link(source::Cstring, dest::Cstring)::Cint
 
 same as:
 
-    ccall(:printf, Cint, (Cstring, Cint), "%d", 10)
+    ccall(:link, Cint, (Cstring, Cstring), source, dest)
 
 All arguments must have type annotations and the return type must also
 be annotated.
 
 varargs are supported with the following convention:
 
-    @ccall printf("%d, %d, %d"::Cstring ; 1::Cint, 2::Cint, 3::Cint)::Cint
+    @ccall printf("%s = %d"::Cstring ; "foo"::Cstring, foo::Cint)::Cint
 
-Mind the semicolon. Note that, as with the current ccall API, all
-varargs must be of the same type.
+Mind the semicolon.
 
 Using functions from other libraries is supported by prefixing
 the function name with the name of the C library, like this:
 
     const glib = "libglib-2.0"
-    @ccall glib.g_uri_escape_string(
-        uri::Cstring, ":/"::Cstring, true::Cint
-    )::Cstring
+    @ccall glib.g_uri_escape_string(uri::Cstring, ":/"::Cstring, true::Cint)::Cstring
 
 The string literal could also be used directly before the symbol of
 the function name, if desired `"libglib-2.0".g_uri_escape_string(...`
 """
-macro ccall(expr)
-    func, rettype, argtypes, args = parsecall(expr)
-    output = :(ccall($func, $rettype, $argtypes))
-    append!(output.args, args)
-    esc(output)
+macro ccall(convention, expr)
+    return lower(convention, parsecall(expr)...)
 end
 
-"""
-    nolinenum(expr)
+macro ccall(expr)
+    return lower(:ccall, parsecall(expr)...)
+end
 
-remove `LineNumberNodes`
-"""
-nolinenum(s) = s
-nolinenum(e::Expr) =
-    Expr(e.head, (nolinenum(a) for a in e.args if !isa(a, LineNumberNode))...)
-
-getsym(arg) = hashead(arg, :(::)) ? arg.args[1] : arg
+getsym(arg) = Meta.isexpr(arg, :(::)) ? arg.args[1] : arg
 getmacrocall(expr) = begin
-    hashead(expr, :macrocall) ? Tuple(expr.args) : (nothing, nothing, expr)
+    Meta.isexpr(expr, :macrocall) ? Tuple(expr.args) : (nothing, nothing, expr)
 end
 
 function cdef(funcname, expr)
@@ -205,7 +191,7 @@ throw a system error if the expression returns a non-zero exit status.
 """
 macro check_syserr(expr, message=nothing)
     if message == nothing
-        message = nolinenum(expr) |> string
+        message = Base.remove_linenums!(expr) |> string
     end
     return quote
         err = $(esc(expr))
