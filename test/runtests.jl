@@ -1,11 +1,11 @@
 using Test
-using CcallMacros: @ccall, parsecall, lower
+using CcallMacros: @ccall, ccall_macro_parse, ccall_macro_lower
 
-@testset "test basic parsecall functionality" begin
+@testset "test basic ccall_macro_parse functionality" begin
     callexpr = :(
         libc.printf("%s = %d\n"::Cstring ; name::Cstring, value::Cint)::Cvoid
     )
-    @test parsecall(callexpr) == (
+    @test ccall_macro_parse(callexpr) == (
         :((:printf, libc)),               # function
         :Cvoid,                           # returntype
         Any[:Cstring, :Cstring, :Cint],   # argument types
@@ -15,7 +15,7 @@ using CcallMacros: @ccall, parsecall, lower
 end
 
 @testset "ensure the base-case of @ccall works, including library name and pointer interpolation" begin
-    call = lower(:ccall, parsecall( :( libstring.func(
+    call = ccall_macro_lower(:ccall, ccall_macro_parse( :( libstring.func(
         str::Cstring,
         num1::Cint,
         num2::Cint
@@ -38,36 +38,36 @@ end
         end)
 
     # pointer interpolation
-    call = lower(:ccall, parsecall(:( $(Expr(:$, :fptr))("bar"::Cstring)::Cvoid ))...)
+    call = ccall_macro_lower(:ccall, ccall_macro_parse(:( $(Expr(:$, :fptr))("bar"::Cstring)::Cvoid ))...)
     @test Base.remove_linenums!(call) == Base.remove_linenums!(
     quote
+        func = $(Expr(:escape, :fptr))
         begin
-            func = $(Expr(:escape, :fptr))
             if !(func isa Ptr{Nothing})
-                name = :fptr
-                throw(ArgumentError("interpolated function `$(name)` was not a Ptr{Nothing}, but $(typeof(func))"))
+                name = :func
+                throw(ArgumentError("interpolated function `$(name)` was not a Ptr{Cvoid}, but $(typeof(func))"))
             end
         end
         arg1root = Base.cconvert($(Expr(:escape, :Cstring)), $(Expr(:escape, "bar")))
         arg1 = Base.unsafe_convert($(Expr(:escape, :Cstring)), arg1root)
-        $(Expr(:foreigncall,
-               :($(Expr(:escape, :fptr))),
-               :($(Expr(:escape, :Cvoid))),
-               :($(Expr(:escape, :(($(Expr(:core, :svec)))(Cstring))))),
-               0,
-               :(:ccall),
-               :arg1, :arg1root))
+        $(Expr(:foreigncall, :func, :($(Expr(:escape, :Cvoid))), :($(Expr(:escape, :(($(Expr(:core, :svec)))(Cstring))))), 0, :(:ccall), :arg1, :arg1root))
     end)
 
 end
 
 @testset "check error paths" begin
     # missing return type
-    @test_throws ArgumentError parsecall(:( foo(4.0::Cdouble )))
+    @test_throws ArgumentError ccall_macro_parse(:( foo(4.0::Cdouble )))
     # not a function call
-    @test_throws ArgumentError parsecall(:( foo::Type ))
+    @test_throws ArgumentError ccall_macro_parse(:( foo::Type ))
     # missing type annotations on arguments
-    @test_throws ArgumentError parsecall(:( foo(x)::Cint ))
+    @test_throws ArgumentError ccall_macro_parse(:( foo(x)::Cint ))
+    # missing type annotations on varargs arguments
+    @test_throws ArgumentError ccall_macro_parse(:( foo(x::Cint ; y)::Cint ))
+    # no reqired args on varargs call
+    @test_throws ArgumentError ccall_macro_parse(:( foo(; x::Cint)::Cint ))
+    # interpolation expression as function name
+    @test_throws ArgumentError ccall_macro_parse(:( $(1 + 2)(x)::Cint ))
     # not a function pointer
     @test_throws ArgumentError @ccall $PROGRAM_FILE("foo"::Cstring)::Cvoid
 end
@@ -83,11 +83,15 @@ end
     @test unsafe_string(buf) == str
     Libc.free(buf)
 
+    # test pointer interpolation
     str_identity = @cfunction(identity, Cstring, (Cstring,))
     foo = @ccall $str_identity("foo"::Cstring)::Cstring
     @test unsafe_string(foo) == "foo"
+    # test interpolation of an expresison that returns a pointer.
+    foo = @ccall $(@cfunction(identity, Cstring, (Cstring,)))("foo"::Cstring)::Cstring
+    @test unsafe_string(foo) == "foo"
 
-    # test of foreigncall with varargs, rewritten with @ccall
+    # test of a vararg foreigncall using @ccall
     strp = Ref{Ptr{Cchar}}(0)
     fmt = "hi+%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%hhd-%.1f-%.1f-%.1f-%.1f-%.1f-%.1f-%.1f-%.1f-%.1f\n"
 

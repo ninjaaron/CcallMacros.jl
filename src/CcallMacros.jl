@@ -2,9 +2,9 @@ module CcallMacros
 export @ccall, @cdef, @disable_sigint, @check_syserr
 
 """
-    parsecall(expression)
+    ccall_macro_parse(expression)
 
-`parsecall` is an implementation detail of `@ccall
+`ccall_macro_parse` is an implementation detail of `@ccall
 
 it takes and expression like `:(printf("%d"::Cstring, value::Cuint)::Cvoid)`
 returns: a tuple of `(function_name, return_type, arg_types, args)`
@@ -13,7 +13,7 @@ The above input outputs this:
 
     (:printf, :Cvoid, [:Cstring, :Cuint], ["%d", :value])
 """
-function parsecall(expr::Expr)
+function ccall_macro_parse(expr::Expr)
     # setup and check for errors
     if !Meta.isexpr(expr, :(::))
         throw(ArgumentError("@ccall needs a function signature with a return type"))
@@ -30,7 +30,7 @@ function parsecall(expr::Expr)
         if Meta.isexpr(f, :.)
             :(($(f.args[2]), $(f.args[1])))
         elseif Meta.isexpr(f, :$)
-            f.args[1]
+            f
         elseif f isa Symbol
             QuoteNode(f)
         else
@@ -65,6 +65,9 @@ function parsecall(expr::Expr)
     # add any varargs if necessary
     nreq = 0
     if !isnothing(varargs)
+        if length(args) == 0
+            throw(ArgumentError("C ABI prohibits vararg without one required argument"))
+        end
         nreq = length(args)
         for a in varargs
             pusharg!(a)
@@ -74,21 +77,25 @@ function parsecall(expr::Expr)
     return func, rettype, types, args, nreq
 end
 
-function lower(convention, func, rettype, types, args, nreq)
+
+function ccall_macro_lower(convention, func, rettype, types, args, nreq)
     lowering = []
     realargs = []
     gcroots = []
 
     # if interpolation was used, ensure  variable is a function pointer at runtime.
-    if func isa Symbol
+    if Meta.isexpr(func, :$)
+        push!(lowering, Expr(:(=), :func, esc(func.args[1])))
+        func = :func
         check = quote
-            func = $(esc(func))
             if !isa(func, Ptr{Nothing})
                 name = $(QuoteNode(func))
-                throw(ArgumentError("interpolated function `$name` was not a Ptr{Nothing}, but $(typeof(func))"))
+                throw(ArgumentError("interpolated function `$name` was not a Ptr{Cvoid}, but $(typeof(func))"))
             end
         end
         push!(lowering, check)
+    else
+        func = esc(func)
     end
 
     for (i, (arg, type)) in enumerate(zip(args, types))
@@ -102,7 +109,7 @@ function lower(convention, func, rettype, types, args, nreq)
     end
     etypes = Expr(:call, Expr(:core, :svec), types...)
     exp = Expr(:foreigncall,
-               esc(func),
+               func,
                esc(rettype),
                esc(etypes),
                nreq,
@@ -113,19 +120,16 @@ function lower(convention, func, rettype, types, args, nreq)
     return Expr(:block, lowering...)
 end
 
-
 """
     @ccall some_c_function(arg::Type [...])::ReturnType
 
-    @ccall calling_convetion some_c_function(arg::Type)::ReturnType
-
 convert a julia-style function definition to a ccall:
 
-    @ccall link(source::Cstring, dest::Cstring)::Cint
+    @ccall strlen(s::Cstring)::Csize_t
 
 same as:
 
-    ccall(:link, Cint, (Cstring, Cstring), source, dest)
+    ccall(:strlen, Csize_t, (Cstring,), s)
 
 All arguments must have type annotations and the return type must also
 be annotated.
@@ -145,12 +149,8 @@ the function name with the name of the C library, like this:
 The string literal could also be used directly before the symbol of
 the function name, if desired `"libglib-2.0".g_uri_escape_string(...`
 """
-macro ccall(convention, expr)
-    return lower(convention, parsecall(expr)...)
-end
-
 macro ccall(expr)
-    return lower(:ccall, parsecall(expr)...)
+    return ccall_macro_lower(:ccall, ccall_macro_parse(expr)...)
 end
 
 getsym(arg) = Meta.isexpr(arg, :(::)) ? arg.args[1] : arg
