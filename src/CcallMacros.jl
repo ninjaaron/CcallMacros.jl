@@ -53,7 +53,7 @@ function ccall_macro_parse(expr::Expr)
 
     function pusharg!(arg)
         if !Meta.isexpr(arg, :(::))
-            throw(ArgumentError("args in @ccall need type annotations. '$(repr(arg))' doesn't have one."))
+            throw(ArgumentError("args in @ccall need type annotations. '$arg' doesn't have one."))
         end
         push!(args, arg.args[1])
         push!(types, arg.args[2])
@@ -86,10 +86,11 @@ function ccall_macro_lower(convention, func, rettype, types, args, nreq)
     # if interpolation was used, ensure  variable is a function pointer at runtime.
     if Meta.isexpr(func, :$)
         push!(lowering, Expr(:(=), :func, esc(func.args[1])))
+        name = QuoteNode(func.args[1])
         func = :func
         check = quote
-            if !isa(func, Ptr{Nothing})
-                name = $(QuoteNode(func))
+            if !isa(func, Ptr{Cvoid})
+                name = $name
                 throw(ArgumentError("interpolated function `$name` was not a Ptr{Cvoid}, but $(typeof(func))"))
             end
         end
@@ -123,13 +124,15 @@ end
 """
     @ccall some_c_function(arg::Type [...])::ReturnType
 
-convert a julia-style function definition to a ccall:
+convert a julia-style function definition to a call to a C function:
 
     @ccall strlen(s::Cstring)::Csize_t
 
-same as:
+This will call the C standard library function:
 
-    ccall(:strlen, Csize_t, (Cstring,), s)
+    size_t strlen(char *)
+
+with a Julia variable named `s`. See also `ccall`.
 
 All arguments must have type annotations and the return type must also
 be annotated.

@@ -43,8 +43,8 @@ end
     quote
         func = $(Expr(:escape, :fptr))
         begin
-            if !(func isa Ptr{Nothing})
-                name = :func
+            if !(func isa Ptr{Cvoid})
+                name = :fptr
                 throw(ArgumentError("interpolated function `$(name)` was not a Ptr{Cvoid}, but $(typeof(func))"))
             end
         end
@@ -57,19 +57,17 @@ end
 
 @testset "check error paths" begin
     # missing return type
-    @test_throws ArgumentError ccall_macro_parse(:( foo(4.0::Cdouble )))
+    @test_throws ArgumentError("@ccall needs a function signature with a return type") ccall_macro_parse(:( foo(4.0::Cdouble )))
     # not a function call
-    @test_throws ArgumentError ccall_macro_parse(:( foo::Type ))
+    @test_throws ArgumentError("@ccall has to take a function call") ccall_macro_parse(:( foo::Type ))
     # missing type annotations on arguments
-    @test_throws ArgumentError ccall_macro_parse(:( foo(x)::Cint ))
+    @test_throws ArgumentError("args in @ccall need type annotations. 'x' doesn't have one.") ccall_macro_parse(:( foo(x)::Cint ))
     # missing type annotations on varargs arguments
-    @test_throws ArgumentError ccall_macro_parse(:( foo(x::Cint ; y)::Cint ))
+    @test_throws ArgumentError("args in @ccall need type annotations. 'y' doesn't have one.") ccall_macro_parse(:( foo(x::Cint ; y)::Cint ))
     # no reqired args on varargs call
-    @test_throws ArgumentError ccall_macro_parse(:( foo(; x::Cint)::Cint ))
-    # interpolation expression as function name
-    @test_throws ArgumentError ccall_macro_parse(:( $(1 + 2)(x)::Cint ))
+    @test_throws ArgumentError("C ABI prohibits vararg without one required argument") ccall_macro_parse(:( foo(; x::Cint)::Cint ))
     # not a function pointer
-    @test_throws ArgumentError @ccall $PROGRAM_FILE("foo"::Cstring)::Cvoid
+    @test_throws ArgumentError("interpolated function `PROGRAM_FILE` was not a Ptr{Cvoid}, but String") @ccall $PROGRAM_FILE("foo"::Cstring)::Cvoid
 end
 
 
