@@ -1,3 +1,5 @@
+This package is now outdated, regarding the `@ccall` macro (in a bit different form) as it has been added to Julia Base module as of Julia 1.5. This package still works in older Julia as explained here, while in Julia 1.5 and newer it's not really needed, but if you do use then because of name conflict you will need to replace with `CcallMacros.@ccall`. That would also be adviced for code for older Julia to be forward-compatible.
+
 # Macros related to `ccall`
 
 ## @ccall macro
@@ -52,9 +54,7 @@ It is technically also possible to write `@ccall
 
 ## @cdef macro
 
-There has been some talk that `@ccall` should be in the `Base` module.
-(this repository is mostly just for polishing it up.) `@cdef` has not
-been discussed in the community at all. It was just something I wanted
+`@cdef` has not been discussed in the community at all. It was just something I wanted
 and it happens to share a lot of code with `@ccall`, so it's in this
 repo, but I'm not necessarily saying it should be in `Base`. It has
 the same syntax as ccall, but it makes a _very_ minimal wrapper
